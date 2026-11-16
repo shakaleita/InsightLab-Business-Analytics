@@ -100,6 +100,20 @@ def export_csv():
     stream=io.StringIO()
     writer=csv.DictWriter(stream,fieldnames=['date','region','product','revenue','units'])
     writer.writeheader()
-    writer.writerows(records)
+    for rec in records:
+        # Excel/LibreOffice-compatible CSV import should not execute formula-like cells.
+        safe={key:("'"+value if isinstance(value,str) and value.lstrip().startswith(('=','+','-','@','\\t','\\r')) else value)
+              for key,value in rec.items()}
+        writer.writerow(safe)
     return StreamingResponse(iter([stream.getvalue()]),media_type='text/csv',headers={'Content-Disposition':'attachment; filename="insightlab-export.csv"'})
 
+
+@app.get('/api/trends/monthly')
+def monthly_trends():
+    with db() as con:
+        return rows(con.execute("""SELECT substr(date,1,7) AS month,
+           COUNT(*) AS records,ROUND(SUM(revenue),2) AS revenue,SUM(units) AS units
+           FROM records WHERE length(date)>=7 GROUP BY substr(date,1,7) ORDER BY month"""))
+
+from security import install_auth
+install_auth(app,DB)

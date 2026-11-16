@@ -1,7 +1,7 @@
 APP_TITLE = 'InsightLab'
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Any
 import sqlite3, os
 from contextlib import contextmanager
@@ -42,10 +42,18 @@ import csv,io
 setup("""CREATE TABLE IF NOT EXISTS records(id INTEGER PRIMARY KEY,date TEXT NOT NULL,region TEXT NOT NULL,product TEXT NOT NULL,revenue REAL NOT NULL,units INTEGER NOT NULL);""")
 class Record(BaseModel):
     date:str
-    region:str
-    product:str
-    revenue:float = Field(ge=0, allow_inf_nan=False)
-    units:int = Field(ge=0)
+    region:str=Field(min_length=1,max_length=100)
+    product:str=Field(min_length=1,max_length=100)
+    revenue:float = Field(ge=0,le=1_000_000_000,allow_inf_nan=False)
+    units:int = Field(ge=0,le=1_000_000)
+
+    @field_validator('date')
+    @classmethod
+    def validate_date(cls,value:str):
+        from datetime import date
+        if len(value)!=10 or date.fromisoformat(value).isoformat()!=value:
+            raise ValueError('Use valid ISO date YYYY-MM-DD')
+        return value
 @app.get('/api/items')
 def items():
     with db() as c:return rows(c.execute('SELECT * FROM records ORDER BY id DESC LIMIT 200'))
@@ -61,8 +69,9 @@ async def import_csv(file:UploadFile=File(...)):
     try:
         parsed=list(csv.DictReader(io.StringIO(content.decode('utf-8-sig'))))
         if len(parsed)>5000:raise ValueError('Maximum 5000 rows')
-        parsed=[(r['date'],r['region'],r['product'],float(r['revenue']),int(r['units'])) for r in parsed]
-        if any(revenue<0 or units<0 for _,_,_,revenue,units in parsed):raise ValueError('Negative revenue or units')
+        # Validate every row before starting any database insert.
+        parsed=[Record(**r) for r in parsed]
+        parsed=[(r.date,r.region,r.product,r.revenue,r.units) for r in parsed]
     except (ValueError,UnicodeDecodeError,KeyError,TypeError) as e:raise HTTPException(422,f'Invalid CSV: {e}')
     with db() as c:c.executemany('INSERT INTO records(date,region,product,revenue,units) VALUES(?,?,?,?,?)',parsed)
     return {'imported':len(parsed)}

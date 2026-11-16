@@ -59,3 +59,14 @@ def test_v06_audit_record_and_cross_site_guard():
     assert client.get('/api/auth/audit',params={'limit':201}).status_code==422
     blocked=client.post('/api/__audit_probe_404',headers={'sec-fetch-site':'cross-site'})
     assert blocked.status_code==403
+
+def test_import_rejects_nonfinite_numbers_and_invalid_dates_atomically():
+    def upload(text):
+        return client.post('/api/import',files={'file':('synthetic.csv',text,'text/csv')})
+    initial=len(client.get('/api/items').json())
+    rejected=upload('date,region,product,revenue,units\n2030-01-01,West,Good,5,1\n2030-01-01,West,Bad,NaN,1\n')
+    assert rejected.status_code==422
+    assert len(client.get('/api/items').json())==initial
+    assert upload('date,region,product,revenue,units\n2030-02-30,West,Bad,1,1\n').status_code==422
+    assert client.post('/api/items',json={'date':'2030-02-30','region':'West','product':'Bad','revenue':1,'units':1}).status_code==422
+    assert upload('date,region,product,revenue,units\n2030-02-28,West,Valid,10.5,2\n').json()['imported']==1
